@@ -4,12 +4,21 @@ import { useEffect, useRef, useState } from "react";
 import Script from "next/script";
 
 type Camera = { id: string; name: string; position: number; monitor: number; siteLabel: string };
-
 type AlertState = { id: string; until: number; label: string };
 
+type MpegtsPlayer = {
+  attachMediaElement(el: HTMLVideoElement): void;
+  load(): void;
+  play(): Promise<void>;
+  destroy(): void;
+  on(ev: string, cb: (...args: unknown[]) => void): void;
+};
 declare global {
   interface Window {
-    JSMpeg?: { Player: new (url: string, opts: Record<string, unknown>) => unknown };
+    mpegts?: {
+      isSupported(): boolean;
+      createPlayer(media: { type: string; isLive: boolean; url: string }, config?: Record<string, unknown>): MpegtsPlayer;
+    };
   }
 }
 
@@ -18,13 +27,12 @@ export default function VideoWallClient({
 }: { cameras: Camera[]; cols: number; rows: number; proxyBase: string }) {
   const slots = cols * rows;
   const tiles = Array.from({ length: slots }, (_, i) => cameras[i] || null);
-  const canvasRefs = useRef<Record<string, HTMLCanvasElement | null>>({});
-  const playersRef = useRef<Record<string, unknown>>({});
+  const videoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
+  const playersRef = useRef<Record<string, MpegtsPlayer>>({});
   const [alerts, setAlerts] = useState<Record<string, AlertState>>({});
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const [jsmpegReady, setJsmpegReady] = useState(false);
+  const [libReady, setLibReady] = useState(false);
 
-  // Resolve proxy base. Prefer WebSocket — jsmpeg works most reliably this way.
   function proxyUrl(cameraId: string) {
     let host: string;
     if (proxyBase) {
@@ -38,34 +46,44 @@ export default function VideoWallClient({
   }
 
   useEffect(() => {
-    if (!jsmpegReady) return;
-    const JS = window.JSMpeg;
-    if (!JS) return;
+    if (!libReady) return;
+    if (!window.mpegts?.isSupported()) return;
     for (const c of cameras) {
-      const canvas = canvasRefs.current[c.id];
-      if (!canvas) continue;
+      const video = videoRefs.current[c.id];
+      if (!video) continue;
       if (playersRef.current[c.id]) continue;
       try {
-        playersRef.current[c.id] = new JS.Player(proxyUrl(c.id), {
-          canvas, autoplay: true, audio: false, videoBufferSize: 1024 * 1024,
-          onSourceCompleted: () => {}, onError: () => {},
-        });
+        const player = window.mpegts.createPlayer(
+          { type: "mpegts", isLive: true, url: proxyUrl(c.id) },
+          {
+            enableWorker: true,
+            enableStashBuffer: false,
+            stashInitialSize: 128,
+            liveBufferLatencyChasing: true,
+            liveBufferLatencyMaxLatency: 2.5,
+            liveBufferLatencyMinRemain: 0.3,
+            autoCleanupSourceBuffer: true,
+          }
+        );
+        player.attachMediaElement(video);
+        player.load();
+        player.play().catch(() => {});
+        player.on("error", (...args) => console.warn("mpegts err", c.id, args));
+        playersRef.current[c.id] = player;
       } catch (e) {
-        console.error("jsmpeg init failed", c.id, e);
+        console.error("mpegts init failed", c.id, e);
       }
     }
-    // Cleanup on unmount
     return () => {
       for (const id of Object.keys(playersRef.current)) {
-        const p = playersRef.current[id] as { destroy?: () => void } | undefined;
-        try { p?.destroy?.(); } catch {}
+        try { playersRef.current[id].destroy(); } catch {}
       }
       playersRef.current = {};
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jsmpegReady, cameras.length]);
+  }, [libReady, cameras.length]);
 
-  // YOLO alert WebSocket — connect to worker; reconnect on close.
+  // YOLO alert WebSocket
   useEffect(() => {
     let ws: WebSocket | null = null;
     let stop = false;
@@ -103,7 +121,7 @@ export default function VideoWallClient({
 
   return (
     <>
-      <Script src="/vendor/jsmpeg.min.js" strategy="afterInteractive" onReady={() => setJsmpegReady(true)} onLoad={() => setJsmpegReady(true)} />
+      <Script src="/vendor/mpegts.min.js" strategy="afterInteractive" onReady={() => setLibReady(true)} onLoad={() => setLibReady(true)} />
       <audio ref={audioRef} preload="auto" src="/vendor/alert.wav" />
       <div className="fixed inset-0 bg-black z-10" style={{
         display: "grid",
@@ -117,9 +135,12 @@ export default function VideoWallClient({
             <div key={idx} className="relative overflow-hidden bg-neutral-900" style={alerted ? { outline: "3px solid #dc2626", outlineOffset: -3, animation: "wallpulse 1s infinite" } : undefined}>
               {cam ? (
                 <>
-                  <canvas
-                    ref={(el) => { canvasRefs.current[cam.id] = el; }}
+                  <video
+                    ref={(el) => { videoRefs.current[cam.id] = el; }}
                     style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                    muted
+                    playsInline
+                    autoPlay
                   />
                   <div className="absolute left-1 bottom-1 px-1.5 py-0.5 rounded text-[11px] bg-black/60 text-white">
                     {cam.siteLabel} · {cam.name}

@@ -10,7 +10,16 @@ type Camera = { id: string; name: string; alarmType: string; siteLabel: string }
 
 declare global {
   interface Window {
-    JSMpeg?: { Player: new (url: string, opts: Record<string, unknown>) => { destroy?: () => void } };
+    mpegts?: {
+      isSupported(): boolean;
+      createPlayer(media: { type: string; isLive: boolean; url: string }, config?: Record<string, unknown>): {
+        attachMediaElement(el: HTMLVideoElement): void;
+        load(): void;
+        play(): Promise<void>;
+        destroy(): void;
+        on(ev: string, cb: (...args: unknown[]) => void): void;
+      };
+    };
   }
 }
 
@@ -19,15 +28,16 @@ const ALARM_LABEL: Record<string, string> = {
 };
 
 export default function LiveViewer({ camera, proxyBase }: { camera: Camera; proxyBase: string }) {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const playerRef = useRef<{ destroy?: () => void } | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const playerRef = useRef<ReturnType<NonNullable<typeof window.mpegts>["createPlayer"]> | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
-  const [jsmpegReady, setJsmpegReady] = useState(false);
+  const [libReady, setLibReady] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
-  const [reloading, setReloading] = useState(0); // bump to recreate player
+  const [reloading, setReloading] = useState(0);
   const [streamUrl, setStreamUrl] = useState("");
+  const [error, setError] = useState<string | null>(null);
 
-  // Build proxy URL on client (prefer ws:// — jsmpeg works most reliably with WebSocket).
+  // Build proxy URL (ws:// MPEG-TS H.264 stream)
   useEffect(() => {
     let host: string;
     if (proxyBase) {
@@ -40,31 +50,53 @@ export default function LiveViewer({ camera, proxyBase }: { camera: Camera; prox
     setStreamUrl(`${wsScheme}://${host}/ws/${encodeURIComponent(camera.id)}?t=${Date.now()}`);
   }, [camera.id, proxyBase, reloading]);
 
-  // Create jsmpeg player when script ready + URL ready.
+  // Initialize mpegts.js player
   useEffect(() => {
-    if (!jsmpegReady || !streamUrl) return;
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    try {
-      playerRef.current?.destroy?.();
-    } catch {}
-    try {
-      const JS = window.JSMpeg;
-      if (!JS) return;
-      playerRef.current = new JS.Player(streamUrl, {
-        canvas,
-        autoplay: true,
-        audio: false,
-        videoBufferSize: 1024 * 1024,
-      });
-    } catch (e) {
-      console.error("jsmpeg init failed", e);
+    if (!libReady || !streamUrl) return;
+    const video = videoRef.current;
+    if (!video) return;
+    setError(null);
+
+    try { playerRef.current?.destroy(); } catch {}
+    playerRef.current = null;
+
+    if (!window.mpegts?.isSupported()) {
+      setError("Browser-ul nu suportă MSE (Media Source Extensions). Folosește Chrome/Edge/Firefox modern.");
+      return;
     }
+
+    try {
+      const player = window.mpegts.createPlayer(
+        { type: "mpegts", isLive: true, url: streamUrl },
+        {
+          enableWorker: true,
+          enableStashBuffer: false,
+          stashInitialSize: 128,
+          liveBufferLatencyChasing: true,
+          liveBufferLatencyMaxLatency: 2.0,
+          liveBufferLatencyMinRemain: 0.3,
+          autoCleanupSourceBuffer: true,
+          fixAudioTimestampGap: false,
+        },
+      );
+      player.attachMediaElement(video);
+      player.load();
+      player.play().catch((e) => console.warn("autoplay blocked", e));
+      player.on("error", (...args: unknown[]) => {
+        console.error("mpegts error", args);
+        setError("Eroare la stream. Apasă Reia.");
+      });
+      playerRef.current = player;
+    } catch (e) {
+      console.error("mpegts init failed", e);
+      setError(String((e as Error).message || e));
+    }
+
     return () => {
-      try { playerRef.current?.destroy?.(); } catch {}
+      try { playerRef.current?.destroy(); } catch {}
       playerRef.current = null;
     };
-  }, [jsmpegReady, streamUrl]);
+  }, [libReady, streamUrl]);
 
   async function toggleFullscreen() {
     const el = wrapRef.current;
@@ -84,7 +116,7 @@ export default function LiveViewer({ camera, proxyBase }: { camera: Camera; prox
 
   return (
     <>
-      <Script src="/vendor/jsmpeg.min.js" strategy="afterInteractive" onReady={() => setJsmpegReady(true)} onLoad={() => setJsmpegReady(true)} />
+      <Script src="/vendor/mpegts.min.js" strategy="afterInteractive" onReady={() => setLibReady(true)} onLoad={() => setLibReady(true)} />
       <div className="space-y-3">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-3">
@@ -110,14 +142,22 @@ export default function LiveViewer({ camera, proxyBase }: { camera: Camera; prox
           className="relative w-full bg-black rounded-lg overflow-hidden border border-neutral-800"
           style={{ aspectRatio: "16/9" }}
         >
-          <canvas
-            ref={canvasRef}
+          <video
+            ref={videoRef}
             className="absolute inset-0 w-full h-full"
             style={{ objectFit: "contain" }}
+            muted
+            playsInline
+            autoPlay
           />
-          {!jsmpegReady && (
+          {!libReady && (
             <div className="absolute inset-0 flex items-center justify-center text-neutral-400 text-sm">
               Se încarcă player-ul…
+            </div>
+          )}
+          {error && (
+            <div className="absolute inset-0 flex items-center justify-center text-red-400 text-sm bg-black/70">
+              {error}
             </div>
           )}
           {fullscreen && (
@@ -131,8 +171,8 @@ export default function LiveViewer({ camera, proxyBase }: { camera: Camera; prox
         </div>
 
         <div className="text-xs text-muted-foreground space-y-1">
-          <div>Stream proxy: <code className="bg-neutral-900 px-1.5 py-0.5 rounded">{streamUrl || "—"}</code></div>
-          <div>Dacă nu apare imagine: așteaptă 5-15s (prin VPN durează mai mult prima conectare), apoi apasă „Reia".</div>
+          <div>Stream H.264 prin: <code className="bg-neutral-900 px-1.5 py-0.5 rounded">{streamUrl || "—"}</code></div>
+          <div>Codec H.264 baseline, decodare nativă MSE. Latență ~1-2s. Apasă „Reia" dacă apar artefacte.</div>
         </div>
       </div>
     </>

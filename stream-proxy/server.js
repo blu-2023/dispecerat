@@ -43,17 +43,37 @@ async function loadCameras() {
 function startCamera(cameraId, rtspUrl) {
   if (procs.has(cameraId)) return procs.get(cameraId);
   console.log(`[proxy] starting ffmpeg for ${cameraId}`);
+  // H.264 in MPEG-TS over WebSocket → browser decodes natively via mpegts.js + MSE.
+  // libx264 ultrafast + zerolatency tuning trades small CPU for low latency.
+  // Tweak SCALE/BITRATE via env vars for per-deployment tuning.
+  const SCALE = process.env.STREAM_SCALE || "scale=854:-2";   // 480p-ish width
+  const FPS = process.env.STREAM_FPS || "15";
+  const BITRATE = process.env.STREAM_BITRATE || "500k";
+  const GOP = process.env.STREAM_GOP || "30";  // keyframe every 2s @ 15fps
+
   const ff = spawn("ffmpeg", [
     "-rtsp_transport", "tcp",
-    "-fflags", "+genpts",
+    "-fflags", "+genpts+nobuffer",
+    "-flags", "low_delay",
     "-i", rtspUrl,
-    "-f", "mpegts",
-    "-codec:v", "mpeg1video",
-    "-b:v", "600k",
-    "-vf", "fps=25,scale=640:-2",
+    "-vf", `fps=${FPS},${SCALE}`,
+    "-codec:v", "libx264",
+    "-preset", "ultrafast",
+    "-tune", "zerolatency",
+    "-profile:v", "baseline",
+    "-level", "3.1",
+    "-pix_fmt", "yuv420p",
+    "-b:v", BITRATE,
+    "-maxrate", BITRATE,
+    "-bufsize", "1M",
+    "-g", GOP,            // keyframe interval
+    "-keyint_min", GOP,
+    "-sc_threshold", "0", // disable scene-change keyframes (more predictable)
     "-bf", "0",
     "-an",
+    "-f", "mpegts",
     "-muxdelay", "0.001",
+    "-muxpreload", "0.001",
     "-",
   ], { stdio: ["ignore", "pipe", "pipe"] });
 
