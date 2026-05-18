@@ -1,0 +1,87 @@
+============================================================
+   DISPECERAT — KIT CAPTURE PE WINDOWS XP
+============================================================
+
+Acest kit transformă PC-ul Windows XP cu placă de captură
+într-un server RTSP. Cele 2 camere BNC vor fi accesibile ca:
+    rtsp://192.168.8.1:8554/cam1
+    rtsp://192.168.8.1:8554/cam2
+
+------------------------------------------------------------
+PAS 1 — Dezarhivează
+------------------------------------------------------------
+Dezarhivează tot kit-ul în:
+    C:\dispecerat-xp\
+(Folderul trebuie să conțină vlc-2.2.8\ și fișierele .bat)
+
+------------------------------------------------------------
+PAS 2 — Vezi numele plăcii de captură
+------------------------------------------------------------
+Dublu-click pe:
+    00-list-devices.bat
+
+Se va deschide o fereastră cu lista dispozitivelor video.
+Caută numele plăcii (ex: "Pinnacle PCTV", "AverMedia",
+"NV6010", "TC-200", etc.). Scrie-l undeva.
+
+Trimite output-ul (text din fereastră) administratorului
+(copy + paste din fereastră).
+
+------------------------------------------------------------
+PAS 3 — Editează scripturile
+------------------------------------------------------------
+Deschide cu Notepad fișierele:
+    start-cam1.bat
+    start-cam2.bat
+
+Înlocuiește NUME_CAPTURE_AICI cu numele exact al plăcii
+(EXACT cum apare la pasul 2, fără ghilimele extra).
+
+Dacă ai un singur device cu canale separate, schimbi
+parametrul " :dshow-vdev=" cu pinul corect.
+
+------------------------------------------------------------
+PAS 4 — Pornește
+------------------------------------------------------------
+Dublu-click pe:
+    start-cam1.bat
+    start-cam2.bat
+
+Lasă cele 2 ferestre deschise. Vei vedea texte din VLC.
+
+VERIFICARE: pe alt PC, deschide VLC sau aplicația noastră
+și încearcă:
+    rtsp://192.168.8.1:8554/cam1
+    rtsp://192.168.8.1:8554/cam2
+
+------------------------------------------------------------
+PROBLEME POSIBILE
+------------------------------------------------------------
+► Dacă fereastra cam1.bat se închide imediat:
+  - Verifică numele plăcii (pasul 2)
+  - Capture card-ul poate fi „blocat" de soft-ul Intotech
+    → încearcă start-screen-cam1.bat (variantă alternativă
+       care captează direct ecranul)
+
+► Dacă apare „dshow access error":
+  - Oprește momentan softul Intotech
+  - Re-pornește start-cam1.bat
+  - Vezi dacă merge fără Intotech
+
+► Firewall Windows XP poate bloca port 8554:
+  - Control Panel → Windows Firewall → Exceptions
+  - Add Port → 8554 TCP → Name: "Dispecerat RTSP"
+
+► Pentru AUTOSTART la pornirea PC-ului:
+  - Copiază lock-cam1.bat și start-cam2.bat în:
+    Start Menu → Programs → Startup
+  - Sau pune-le scheduled task
+
+------------------------------------------------------------
+SUPORT
+------------------------------------------------------------
+Trimite administratorului:
+  1. Output de la 00-list-devices.bat
+  2. Versiunea XP (Service Pack — vezi în My Computer → Properties)
+  3. Modelul plăcii de captură (vezi în Device Manager →
+     Sound, video and game controllers)
