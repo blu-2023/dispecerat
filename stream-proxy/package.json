@@ -4,5 +4,13 @@
   "private": true,
   "scripts": {
     "start": "node server.js"
+  },
+  "main": "server.js",
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "ws": "^8.20.1"
   }
 }

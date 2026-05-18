@@ -27,10 +27,17 @@ export default function LiveViewer({ camera, proxyBase }: { camera: Camera; prox
   const [reloading, setReloading] = useState(0); // bump to recreate player
   const [streamUrl, setStreamUrl] = useState("");
 
-  // Build proxy URL on client (so window.location is available).
+  // Build proxy URL on client (prefer ws:// — jsmpeg works most reliably with WebSocket).
   useEffect(() => {
-    const base = proxyBase || `${window.location.protocol}//${window.location.hostname}:4011`;
-    setStreamUrl(`${base}/stream/${encodeURIComponent(camera.id)}?t=${Date.now()}`);
+    let host: string;
+    if (proxyBase) {
+      try { host = new URL(proxyBase).host; }
+      catch { host = `${window.location.hostname}:4011`; }
+    } else {
+      host = `${window.location.hostname}:4011`;
+    }
+    const wsScheme = window.location.protocol === "https:" ? "wss" : "ws";
+    setStreamUrl(`${wsScheme}://${host}/ws/${encodeURIComponent(camera.id)}?t=${Date.now()}`);
   }, [camera.id, proxyBase, reloading]);
 
   // Create jsmpeg player when script ready + URL ready.

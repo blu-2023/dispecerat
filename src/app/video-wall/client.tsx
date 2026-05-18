@@ -24,11 +24,17 @@ export default function VideoWallClient({
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [jsmpegReady, setJsmpegReady] = useState(false);
 
-  // Resolve proxy base — works both when served by the same origin and when
-  // overridden via NEXT_PUBLIC_STREAM_PROXY (e.g. Electron pointing elsewhere).
+  // Resolve proxy base. Prefer WebSocket — jsmpeg works most reliably this way.
   function proxyUrl(cameraId: string) {
-    const base = proxyBase || `${window.location.protocol}//${window.location.hostname}:4011`;
-    return `${base}/stream/${encodeURIComponent(cameraId)}`;
+    let host: string;
+    if (proxyBase) {
+      try { host = new URL(proxyBase).host; }
+      catch { host = `${window.location.hostname}:4011`; }
+    } else {
+      host = `${window.location.hostname}:4011`;
+    }
+    const wsScheme = window.location.protocol === "https:" ? "wss" : "ws";
+    return `${wsScheme}://${host}/ws/${encodeURIComponent(cameraId)}`;
   }
 
   useEffect(() => {
