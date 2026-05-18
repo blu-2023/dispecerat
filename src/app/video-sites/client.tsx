@@ -167,12 +167,47 @@ function NvrRow({
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [addingChannel, setAddingChannel] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<null | {
+    reachable: boolean;
+    web: { port: number; ok: boolean; ms: number; err?: string };
+    rtsp: { port: number; ok: boolean; ms: number; err?: string };
+  }>(null);
   const webUrl = `http://${nvr.ipAddress}${nvr.webPort && nvr.webPort !== 80 ? `:${nvr.webPort}` : ""}`;
 
   async function remove() {
     if (!confirm(`Ștergi NVR-ul „${nvr.name}"? Camerele atașate rămân, doar legătura se șterge.`)) return;
     const r = await fetch(`/api/nvrs/${nvr.id}`, { method: "DELETE" });
     if (r.ok) onChanged();
+  }
+
+  async function testConnection() {
+    setTesting(true); setTestResult(null);
+    const r = await fetch(`/api/nvrs/${nvr.id}/test`, { method: "POST" });
+    setTesting(false);
+    if (r.ok) setTestResult(await r.json());
+    else setTestResult({ reachable: false, web: { port: nvr.webPort, ok: false, ms: 0, err: "API error" }, rtsp: { port: nvr.rtspPort, ok: false, ms: 0, err: "API error" } });
+  }
+
+  async function importChannels() {
+    const total = nvr.channelsCount || 16;
+    if (!confirm(`Generează automat camere pentru canalele 1-${total}? Existente nu se duplică.`)) return;
+    setImporting(true);
+    const r = await fetch(`/api/nvrs/${nvr.id}/import-channels`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ from: 1, to: total, stream: "main", yoloEnabled: true }),
+    });
+    setImporting(false);
+    if (r.ok) {
+      const { created } = await r.json();
+      if (created > 0) alert(`${created} canale create.`);
+      else alert("Toate canalele erau deja create.");
+      onChanged();
+    } else {
+      alert("Eroare la import canale.");
+    }
   }
 
   if (editing) {
@@ -226,10 +261,29 @@ function NvrRow({
             </ul>
           </div>
 
-          <div className="pt-2 border-t border-neutral-800/70 flex gap-2">
+          <div className="pt-2 border-t border-neutral-800/70 flex gap-2 flex-wrap">
+            <Button size="xs" variant="outline" onClick={testConnection} disabled={testing}>
+              {testing ? "Se testează…" : "Test conexiune"}
+            </Button>
+            <Button size="xs" variant="outline" onClick={importChannels} disabled={importing}>
+              {importing ? "Se importă…" : `Importă toate canalele (1-${nvr.channelsCount || "?"})`}
+            </Button>
             <Button size="xs" variant="outline" onClick={() => setEditing(true)}>Editează NVR</Button>
-            <Button size="xs" variant="destructive" onClick={remove}><Trash2 className="w-3 h-3 mr-1" />Șterge NVR</Button>
+            <Button size="xs" variant="destructive" onClick={remove}><Trash2 className="w-3 h-3 mr-1" />Șterge</Button>
           </div>
+          {testResult && (
+            <div className="mt-2 text-xs space-y-0.5 p-2 rounded bg-neutral-950/70 border border-neutral-800">
+              <div className={testResult.reachable ? "text-green-400" : "text-red-400"}>
+                {testResult.reachable ? "✓ NVR accesibil" : "✗ NVR inaccesibil"} ({nvr.ipAddress})
+              </div>
+              <div className={testResult.web.ok ? "text-green-300" : "text-red-300"}>
+                Web :{testResult.web.port} — {testResult.web.ok ? `OK (${testResult.web.ms}ms)` : `eșec (${testResult.web.err || ""})`}
+              </div>
+              <div className={testResult.rtsp.ok ? "text-green-300" : "text-red-300"}>
+                RTSP :{testResult.rtsp.port} — {testResult.rtsp.ok ? `OK (${testResult.rtsp.ms}ms)` : `eșec (${testResult.rtsp.err || ""})`}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
