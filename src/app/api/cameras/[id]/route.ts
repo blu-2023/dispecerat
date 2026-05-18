@@ -34,7 +34,7 @@ export async function PATCH(
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
     const body = await request.json();
-    const { siteId, nvrId, channel, name, rtspUrl, enabled, yoloEnabled, position, monitor, notes } = body;
+    const { siteId, nvrId, channel, name, rtspUrl, enabled, yoloEnabled, alarmType, position, monitor, notes } = body;
     const camera = await prisma.camera.update({
       where: { id },
       data: {
@@ -43,6 +43,7 @@ export async function PATCH(
         ...(channel !== undefined && { channel: channel != null ? Number(channel) : null }),
         ...(name !== undefined && { name }),
         ...(rtspUrl !== undefined && { rtspUrl }),
+        ...(alarmType !== undefined && { alarmType }),
         ...(enabled !== undefined && { enabled }),
         ...(yoloEnabled !== undefined && { yoloEnabled }),
         ...(position !== undefined && { position }),

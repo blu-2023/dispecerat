@@ -126,6 +126,12 @@ model Camera {
   channel        Int?
   name           String
   rtspUrl        String
+  // What YOLO should alert on for this camera: person | vehicle | both | motion
+  // person  = persoană detectată (class 0)
+  // vehicle = vehicul (clase 2 bicicletă/3 mașină/5 autobuz/7 camion)
+  // both    = persoană sau vehicul
+  // motion  = orice mișcare (motion gating only, fără YOLO)
+  alarmType      String   @default("person")
   enabled        Boolean  @default(true)
   yoloEnabled    Boolean  @default(true)
   // Position on the video wall (0..N-1). N = cols*rows*walls.

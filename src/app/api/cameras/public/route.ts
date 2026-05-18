@@ -20,6 +20,7 @@ export async function GET(request: NextRequest) {
       name: true,
       rtspUrl: true,
       yoloEnabled: true,
+      alarmType: true,
       monitor: true,
       position: true,
       siteId: true,

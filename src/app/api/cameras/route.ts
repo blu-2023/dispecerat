@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getOrgId } from "@/lib/session";
+import { ensureDefaultSite } from "@/lib/camera-bootstrap";
+
+const VALID_ALARM_TYPES = ["person", "vehicle", "both", "motion"];
 
 export async function GET(request: NextRequest) {
   try {
@@ -18,6 +21,7 @@ export async function GET(request: NextRequest) {
       where,
       include: {
         site: { select: { id: true, name: true, code: true, client: { select: { id: true, name: true } } } },
+        nvr: { select: { id: true, name: true } },
       },
       orderBy: [{ monitor: "asc" }, { position: "asc" }],
     });
@@ -32,19 +36,27 @@ export async function POST(request: NextRequest) {
   try {
     const orgId = await getOrgId();
     const body = await request.json();
-    const { siteId, nvrId, channel, name, rtspUrl, enabled, yoloEnabled, position, monitor, notes } = body;
+    let { siteId } = body;
+    const { nvrId, channel, name, rtspUrl, enabled, yoloEnabled, alarmType, position, monitor, notes } = body;
 
-    if (!siteId || !name || !rtspUrl) {
-      return NextResponse.json({ error: "siteId, name, rtspUrl required" }, { status: 400 });
+    if (!name || !rtspUrl) {
+      return NextResponse.json({ error: "Nume și URL RTSP sunt obligatorii" }, { status: 400 });
+    }
+    if (alarmType && !VALID_ALARM_TYPES.includes(alarmType)) {
+      return NextResponse.json({ error: "Tip alertă invalid" }, { status: 400 });
     }
 
-    // Verify site belongs to org (multi-tenant guard).
-    const site = await prisma.site.findUnique({ where: { id: siteId } });
-    if (!site || site.organizationId !== orgId) {
-      return NextResponse.json({ error: "Site invalid" }, { status: 400 });
+    // If no site is provided, auto-bootstrap a default Site for this org.
+    if (!siteId) {
+      const ensured = await ensureDefaultSite(orgId);
+      siteId = ensured.siteId;
+    } else {
+      const site = await prisma.site.findUnique({ where: { id: siteId } });
+      if (!site || site.organizationId !== orgId) {
+        return NextResponse.json({ error: "Obiectiv invalid" }, { status: 400 });
+      }
     }
 
-    // If nvrId provided, verify it belongs to this org and site.
     if (nvrId) {
       const nvr = await prisma.nvr.findUnique({ where: { id: nvrId } });
       if (!nvr || nvr.organizationId !== orgId || nvr.siteId !== siteId) {
@@ -60,6 +72,7 @@ export async function POST(request: NextRequest) {
         channel: channel != null ? Number(channel) : null,
         name,
         rtspUrl,
+        alarmType: alarmType || "person",
         enabled: enabled ?? true,
         yoloEnabled: yoloEnabled ?? true,
         position: position ?? 0,

@@ -125,10 +125,29 @@ class CameraThread(threading.Thread):
     def run(self):
         rtsp = self.cam["rtspUrl"]
         cam_id = self.cam["id"]
+        # alarmType drives which COCO classes we look for:
+        #   person  -> [0]
+        #   vehicle -> [1 bicycle, 2 car, 3 motorcycle, 5 bus, 7 truck]
+        #   both    -> all of the above
+        #   motion  -> no YOLO, just motion gating triggers alert
+        alarm_type = (self.cam.get("alarmType") or "person").lower()
+        if alarm_type == "person":
+            yolo_classes = [0]
+            class_to_label = {0: "person"}
+        elif alarm_type == "vehicle":
+            yolo_classes = [1, 2, 3, 5, 7]
+            class_to_label = {1: "bicycle", 2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
+        elif alarm_type == "both":
+            yolo_classes = [0, 1, 2, 3, 5, 7]
+            class_to_label = {0: "person", 1: "bicycle", 2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
+        else:  # motion or unknown
+            yolo_classes = None
+            class_to_label = {}
+
         last_emit = 0.0
         last_gray = None
         cap = cv2.VideoCapture(rtsp)
-        LOG.info("opened %s (%s)", cam_id, "ok" if cap.isOpened() else "FAILED")
+        LOG.info("opened %s alarm=%s (%s)", cam_id, alarm_type, "ok" if cap.isOpened() else "FAILED")
         while not self.stopped:
             if not cap.isOpened():
                 time.sleep(2)
@@ -145,39 +164,62 @@ class CameraThread(threading.Thread):
             # Motion gate to skip inference on static scenes.
             small = cv2.resize(frame, (160, 90))
             gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-            run_inference = True
+            motion_detected = False
             if last_gray is not None:
                 diff = cv2.absdiff(gray, last_gray)
                 changed = np.count_nonzero(diff > 15) / diff.size
-                run_inference = changed > MOTION_THRESHOLD
+                motion_detected = changed > MOTION_THRESHOLD
             last_gray = gray
 
-            if not run_inference or model is None:
+            # Motion-only alarmType: alert on any motion above threshold.
+            if alarm_type == "motion":
+                if motion_detected and time.time() - last_emit > COOLDOWN:
+                    last_emit = time.time()
+                    snap = save_snapshot(cam_id, frame)
+                    ev = {
+                        "cameraId": cam_id,
+                        "label": "motion",
+                        "confidence": 1.0,
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "snapshotPath": snap,
+                    }
+                    LOG.info("MOTION %s", cam_id)
+                    self.push(ev)
+                continue
+
+            # YOLO path — need motion to run inference (saves CPU).
+            if not motion_detected or model is None:
                 continue
 
             try:
-                results = model.predict(source=frame, conf=CONF, device=DEVICE, verbose=False, classes=[0])
+                results = model.predict(
+                    source=frame, conf=CONF, device=DEVICE, verbose=False,
+                    classes=yolo_classes,
+                )
             except Exception as e:
                 LOG.warning("inference error %s: %s", cam_id, e)
                 continue
 
             best = 0.0
+            best_label = "object"
             for r in results:
                 for box in r.boxes:
                     conf = float(box.conf.item())
                     if conf > best:
                         best = conf
+                        cls_id = int(box.cls.item())
+                        best_label = class_to_label.get(cls_id, f"class_{cls_id}")
             if best >= CONF and time.time() - last_emit > COOLDOWN:
                 last_emit = time.time()
                 snap = save_snapshot(cam_id, frame)
                 ev = {
                     "cameraId": cam_id,
-                    "label": "person",
+                    "label": best_label,
                     "confidence": round(best, 3),
                     "ts": datetime.now(timezone.utc).isoformat(),
                     "snapshotPath": snap,
                 }
-                LOG.info("DETECT %s conf=%.2f", cam_id, best)
+                LOG.info("DETECT %s %s conf=%.2f", cam_id, best_label, best)
                 self.push(ev)
         try:
             cap.release()
