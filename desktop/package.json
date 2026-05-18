@@ -4,6 +4,10 @@
   "private": true,
   "description": "Aplicație desktop Dispecerat — Interguard Group",
   "author": "Interguard Group",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/blu-2023/dispecerat.git"
+  },
   "main": "main.js",
   "scripts": {
     "start": "electron .",
