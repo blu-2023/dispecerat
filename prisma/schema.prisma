@@ -1,0 +1,296 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  email     String?
+  phone     String?
+  address   String?
+  logo      String?
+  plan      String   @default("FREE") // FREE, PRO, ENTERPRISE
+  active    Boolean  @default(true)
+  smtpHost  String?
+  smtpPort  String?
+  smtpUser  String?
+  smtpPass  String?
+  smtpFrom  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users          User[]
+  clients        Client[]
+  sites          Site[]
+  incidents      Incident[]
+  emailTemplates EmailTemplate[]
+  auditLogs      AuditLog[]
+  sekaReceivers  SekaReceiver[]
+  sekaEvents     SekaEvent[]
+  cameras        Camera[]
+  wallPages      WallPage[]
+}
+
+model User {
+  id             String       @id @default(cuid())
+  organizationId String
+  name           String
+  email          String       @unique
+  passwordHash   String
+  role           String       @default("DISPECERAT") // DISPECERAT, ADMIN, DIRECTOR
+  active         Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdIncidents  Incident[]   @relation("CreatedBy")
+  assignedIncidents Incident[]   @relation("AssignedTo")
+  auditLogs         AuditLog[]
+}
+
+model Client {
+  id             String    @id @default(cuid())
+  organizationId String
+  name           String
+  email          String
+  emailSecondary String?
+  phone          String?
+  address        String?
+  active         Boolean   @default(true)
+  notifyMode     String    @default("MANUAL_ONLY") // AUTO_ASSISTED, MANUAL_ONLY
+  notes          String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contacts     Contact[]
+  sites        Site[]
+  incidents    Incident[]
+  templates    EmailTemplate[]
+}
+
+model Contact {
+  id        String  @id @default(cuid())
+  clientId  String
+  name      String
+  phone     String?
+  email     String?
+  role      String?
+  isPrimary Boolean @default(false)
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+}
+
+model Site {
+  id                 String   @id @default(cuid())
+  organizationId     String
+  clientId           String
+  name               String
+  code               String   @unique
+  address            String?
+  hasVpnVideo        Boolean  @default(false)
+  vpnLink            String?
+  vpnUsername         String?
+  vpnNotes           String?
+  monitoringSchedule String?
+  services           String?
+  notes              String?
+  sekaAccountCode    String?  // cod cont SEKA pentru mapare automată alarme
+  active             Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  client       Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  incidents    Incident[]
+  sekaEvents   SekaEvent[]
+  cameras      Camera[]
+  wallPages    WallPageSite[]
+}
+
+model Camera {
+  id             String   @id @default(cuid())
+  organizationId String
+  siteId         String
+  name           String
+  rtspUrl        String
+  enabled        Boolean  @default(true)
+  yoloEnabled    Boolean  @default(true)
+  // Position on the video wall (0..N-1). N = cols*rows*walls.
+  position       Int      @default(0)
+  // Which wall window the tile belongs to (0 = primary monitor).
+  monitor        Int      @default(0)
+  notes          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  site         Site             @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  detections   CameraDetection[]
+}
+
+model CameraDetection {
+  id          String   @id @default(cuid())
+  cameraId    String
+  label       String   @default("person")
+  confidence  Float
+  // Optional snapshot path saved by the worker on disk for review.
+  snapshotPath String?
+  createdAt   DateTime @default(now())
+
+  camera Camera @relation(fields: [cameraId], references: [id], onDelete: Cascade)
+}
+
+// A configurable "video wall page" — a saved layout (grid + monitor + name)
+// with a set of sites attached. Live view renders all enabled cameras of
+// those sites in the layout, sorted by camera.position.
+model WallPage {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  cols           Int      @default(5)
+  rows           Int      @default(4)
+  // Default monitor (0..N-1) when launched from Electron menu.
+  monitor        Int      @default(0)
+  notes          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sites        WallPageSite[]
+}
+
+// M2M between WallPage and Site (a wall page can include multiple sites,
+// and a site can appear on multiple wall pages).
+model WallPageSite {
+  id         String   @id @default(cuid())
+  wallPageId String
+  siteId     String
+  // Optional ordering of sites within the wall (for UI grouping).
+  position   Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  wallPage WallPage @relation(fields: [wallPageId], references: [id], onDelete: Cascade)
+  site     Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@unique([wallPageId, siteId])
+}
+
+model Incident {
+  id             String   @id @default(cuid())
+  organizationId String
+  clientId       String
+  siteId         String
+  source         String
+  incidentType   String
+  severity       String   @default("MEDIUM")
+  description    String
+  eventTime      DateTime
+  timeRange      String?
+  measures       String?
+  status         String   @default("NEW")
+  createdById    String
+  assignedToId   String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  client       Client          @relation(fields: [clientId], references: [id])
+  site         Site            @relation(fields: [siteId], references: [id])
+  createdBy    User            @relation("CreatedBy", fields: [createdById], references: [id])
+  assignedTo   User?           @relation("AssignedTo", fields: [assignedToId], references: [id])
+  emails       IncidentEmail[]
+}
+
+model IncidentEmail {
+  id           String    @id @default(cuid())
+  incidentId   String
+  toEmail      String
+  subject      String
+  body         String
+  sentStatus   String    @default("PENDING")
+  sentAt       DateTime?
+  errorMessage String?
+  createdAt    DateTime  @default(now())
+
+  incident Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+}
+
+model EmailTemplate {
+  id              String   @id @default(cuid())
+  organizationId  String
+  clientId        String?
+  type            String
+  name            String
+  subjectTemplate String
+  bodyTemplate    String
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  client       Client?      @relation(fields: [clientId], references: [id], onDelete: SetNull)
+}
+
+model AuditLog {
+  id             String   @id @default(cuid())
+  organizationId String
+  userId         String
+  action         String
+  entityType     String
+  entityId       String?
+  details        String?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id])
+}
+
+model SekaReceiver {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String   // ex: "SEKA GPRS #1", "SEKA GPRS #2"
+  ipAddress      String
+  port           Int      @default(12000)
+  protocol       String   @default("CONTACT_ID") // CONTACT_ID, SIA
+  active         Boolean  @default(true)
+  pollInterval   Int      @default(5) // secunde între interogări
+  status         String   @default("OFFLINE") // ONLINE, OFFLINE, ERROR
+  lastPollAt     DateTime?
+  lastEventAt    DateTime?
+  errorMessage   String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  events       SekaEvent[]
+}
+
+model SekaEvent {
+  id             String    @id @default(cuid())
+  organizationId String
+  receiverId     String
+  siteId         String?   // mapare automată pe baza accountCode
+  incidentId     String?   // legătură cu sesizarea creată automat
+  accountCode    String    // codul contului din mesajul SEKA
+  eventCode      String    // codul evenimentului (ex: "130" = efracție burglar)
+  eventQualifier String    // E = eveniment nou, R = restaurare
+  zone           String?   // zona/partiția
+  rawMessage     String    // mesajul brut primit
+  eventType      String    // tipul interpretat: BURGLARY, PANIC, FIRE, etc.
+  eventLabel     String    // label uman: "Efracție", "Panică", etc.
+  severity       String    @default("HIGH")
+  status         String    @default("NEW") // NEW, PROCESSED, IGNORED, ERROR
+  processedAt    DateTime?
+  createdAt      DateTime  @default(now())
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  receiver     SekaReceiver  @relation(fields: [receiverId], references: [id], onDelete: Cascade)
+  site         Site?         @relation(fields: [siteId], references: [id])
+}
