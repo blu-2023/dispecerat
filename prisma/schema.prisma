@@ -35,6 +35,7 @@ model Organization {
   sekaEvents     SekaEvent[]
   cameras        Camera[]
   wallPages      WallPage[]
+  nvrs           Nvr[]
 }
 
 model User {
@@ -112,12 +113,17 @@ model Site {
   sekaEvents   SekaEvent[]
   cameras      Camera[]
   wallPages    WallPageSite[]
+  nvrs         Nvr[]
 }
 
 model Camera {
   id             String   @id @default(cuid())
   organizationId String
   siteId         String
+  // Optional — if the camera is a channel on an NVR, link it. Null = direct IP camera.
+  nvrId          String?
+  // Optional — channel number on the NVR (1..N).
+  channel        Int?
   name           String
   rtspUrl        String
   enabled        Boolean  @default(true)
@@ -132,7 +138,33 @@ model Camera {
 
   organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   site         Site             @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  nvr          Nvr?             @relation(fields: [nvrId], references: [id], onDelete: SetNull)
   detections   CameraDetection[]
+}
+
+// NVR / DVR — physical Network Video Recorder at a site.
+// Cameras attached to an NVR reference it via Camera.nvrId.
+// The RTSP URLs on cameras typically go *through* the NVR (e.g. channel paths).
+model Nvr {
+  id             String   @id @default(cuid())
+  organizationId String
+  siteId         String
+  name           String
+  brand          String?  // ex: Hikvision, Dahua, Uniview, Axis
+  model          String?  // ex: DS-7716NI-K4
+  ipAddress      String   // LAN or VPN IP
+  webPort        Int      @default(80)   // HTTP web admin port
+  rtspPort       Int      @default(554)
+  username       String?
+  password       String?  // stored as-is for now; encrypt at rest later
+  channelsCount  Int      @default(0)    // total channels on the device
+  notes          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  site         Site         @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  cameras      Camera[]
 }
 
 model CameraDetection {

@@ -24,7 +24,7 @@ import {
 const navigation = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   { name: "Pereți video", href: "/walls", icon: MonitorPlay },
-  { name: "Obiective VPN", href: "/vpn-sites", icon: Camera },
+  { name: "Obiective video", href: "/video-sites", icon: Camera },
   { name: "Sesizare nouă", href: "/incidents/new", icon: AlertTriangle },
   { name: "Sesizări", href: "/incidents", icon: ScrollText },
   { name: "Clienți", href: "/clients", icon: Users },
