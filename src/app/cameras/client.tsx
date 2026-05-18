@@ -170,7 +170,10 @@ export default function CamerasClient({ cameras: initial }: { cameras: Camera[] 
                     }} onCancel={() => setEditingId(null)} />
                   </div>
                 ) : (
-                  <div className="flex gap-1.5 pt-1">
+                  <div className="flex gap-1.5 pt-1 flex-wrap">
+                    <Link href={`/cameras/${c.id}/live`}>
+                      <Button size="xs">▶ Live</Button>
+                    </Link>
                     <Button size="xs" variant="outline" onClick={() => toggleEnabled(c)}>
                       {c.enabled ? "Oprește" : "Pornește"}
                     </Button>

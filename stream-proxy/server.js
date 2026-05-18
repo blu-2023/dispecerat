@@ -15,7 +15,9 @@ const { spawn } = require("child_process");
 
 const PORT = Number(process.env.STREAM_PROXY_PORT || 4011);
 const WEB = process.env.WEB_BASE_URL || "http://127.0.0.1:3000";
-const TOKEN = process.env.STREAM_PROXY_TOKEN || ""; // optional
+// Use STREAM_PROXY_TOKEN if set, else fall back to YOLO_INGEST_TOKEN
+// (the public endpoint accepts both header names with the same token).
+const TOKEN = process.env.STREAM_PROXY_TOKEN || process.env.YOLO_INGEST_TOKEN || "";
 
 const procs = new Map(); // cameraId -> { ff, rtspUrl, clients: Set<res> }
 const cameraCache = new Map(); // cameraId -> rtspUrl
@@ -45,13 +47,15 @@ function startCamera(cameraId, rtspUrl) {
   console.log(`[proxy] starting ffmpeg for ${cameraId}`);
   const ff = spawn("ffmpeg", [
     "-rtsp_transport", "tcp",
+    "-fflags", "+genpts",
     "-i", rtspUrl,
     "-f", "mpegts",
     "-codec:v", "mpeg1video",
-    "-b:v", "800k",
-    "-r", "15",
+    "-b:v", "600k",
+    "-vf", "fps=25,scale=640:-2",
     "-bf", "0",
-    "-an", // strip audio (saves CPU). Re-enable per-camera later if needed.
+    "-an",
+    "-tune", "zerolatency",
     "-muxdelay", "0.001",
     "-",
   ], { stdio: ["ignore", "pipe", "pipe"] });
