@@ -146,8 +146,18 @@ class CameraThread(threading.Thread):
 
         last_emit = 0.0
         last_gray = None
+        # Anti-false-positive: require N consecutive detections above HIGH conf.
+        # Resets after a gap >5s without detection.
+        consecutive_hits = 0
+        last_hit_at = 0.0
+        REQUIRED_HITS = int(os.environ.get("YOLO_REQUIRED_HITS", "2"))
+        HIGH_CONF = float(os.environ.get("YOLO_HIGH_CONFIDENCE", "0.65"))
+        # Size filter: ignore detections that occupy too little or too much of the frame
+        MIN_BBOX_RATIO = float(os.environ.get("YOLO_MIN_BBOX_RATIO", "0.01"))   # 1% of frame area
+        MAX_BBOX_RATIO = float(os.environ.get("YOLO_MAX_BBOX_RATIO", "0.6"))    # 60% of frame area
+
         cap = cv2.VideoCapture(rtsp)
-        LOG.info("opened %s alarm=%s (%s)", cam_id, alarm_type, "ok" if cap.isOpened() else "FAILED")
+        LOG.info("opened %s alarm=%s req_hits=%d conf>=%.2f (%s)", cam_id, alarm_type, REQUIRED_HITS, HIGH_CONF, "ok" if cap.isOpened() else "FAILED")
         while not self.stopped:
             if not cap.isOpened():
                 time.sleep(2)
@@ -200,16 +210,44 @@ class CameraThread(threading.Thread):
                 LOG.warning("inference error %s: %s", cam_id, e)
                 continue
 
+            h, w = frame.shape[:2]
+            frame_area = float(h * w)
             best = 0.0
             best_label = "object"
+            valid_hit = False
             for r in results:
                 for box in r.boxes:
                     conf = float(box.conf.item())
+                    # Filter by size: too small/large bboxes are likely noise/false
+                    xyxy = box.xyxy[0].tolist()
+                    bw = max(0, xyxy[2] - xyxy[0])
+                    bh = max(0, xyxy[3] - xyxy[1])
+                    area_ratio = (bw * bh) / frame_area if frame_area > 0 else 0
+                    if area_ratio < MIN_BBOX_RATIO or area_ratio > MAX_BBOX_RATIO:
+                        continue  # implausible size
                     if conf > best:
                         best = conf
                         cls_id = int(box.cls.item())
                         best_label = class_to_label.get(cls_id, f"class_{cls_id}")
-            if best >= CONF and time.time() - last_emit > COOLDOWN:
+                        if conf >= HIGH_CONF:
+                            valid_hit = True
+
+            # Reset consecutive counter if we lost track for >5s
+            now = time.time()
+            if now - last_hit_at > 5.0:
+                consecutive_hits = 0
+
+            if valid_hit:
+                consecutive_hits += 1
+                last_hit_at = now
+                LOG.info("HIT %s %s conf=%.2f (%d/%d)", cam_id, best_label, best, consecutive_hits, REQUIRED_HITS)
+            else:
+                # If no high-conf this frame, decay
+                if best > 0:
+                    LOG.debug("low-conf %s %s conf=%.2f (ignored)", cam_id, best_label, best)
+                continue
+
+            if consecutive_hits >= REQUIRED_HITS and now - last_emit > COOLDOWN:
                 last_emit = time.time()
                 snap = save_snapshot(cam_id, frame)
                 ev = {
@@ -219,8 +257,10 @@ class CameraThread(threading.Thread):
                     "ts": datetime.now(timezone.utc).isoformat(),
                     "snapshotPath": snap,
                 }
-                LOG.info("DETECT %s %s conf=%.2f", cam_id, best_label, best)
+                LOG.info("DETECT %s %s conf=%.2f hits=%d", cam_id, best_label, best, consecutive_hits)
                 self.push(ev)
+                # Reset hit counter after emitting to require fresh confirmation
+                consecutive_hits = 0
         try:
             cap.release()
         except Exception:
