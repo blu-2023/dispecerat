@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Radio, Wifi, WifiOff, AlertTriangle, Bell, XCircle, Phone, Mail, MapPin, ExternalLink, Clock, Pause, Play } from "lucide-react";
 
-type Contact = { id: string; name: string; phone?: string | null; email?: string | null; role?: string | null; primary: boolean };
+type Contact = { id: string; name: string; phone?: string | null; email?: string | null; role?: string | null; isPrimary: boolean };
 type Client = { id: string; name: string; phone?: string | null; email: string; contacts: Contact[] };
 type Site = { id: string; name: string; code: string; address?: string | null; sekaAccountCode?: string | null; client: Client };
 type Receiver = { id: string; name: string; ipAddress: string; port: number; status: string; lastEventAt?: string | null };
@@ -258,7 +258,7 @@ function EventCard({ event, isFresh }: { event: SekaEvent; isFresh: boolean }) {
               <div className="space-y-1">
                 {event.site.client.contacts.slice(0, 2).map(c => (
                   <div key={c.id} className="text-xs">
-                    <div className="font-medium">{c.name}{c.primary && <span className="text-yellow-400 ml-1">★</span>}</div>
+                    <div className="font-medium">{c.name}{c.isPrimary && <span className="text-yellow-400 ml-1">★</span>}</div>
                     {c.phone && (
                       <a href={`tel:${c.phone}`} className="flex items-center gap-1 text-blue-300 hover:underline">
                         <Phone className="w-3 h-3" /> {c.phone}
