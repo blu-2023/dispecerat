@@ -57,3 +57,4 @@ dev.db-journal
 # Stream proxy logs
 /stream-proxy/*.log
 /public/downloads/dispecerat-xp-kit.zip
+/public/downloads/sempral-sync-kit.zip
