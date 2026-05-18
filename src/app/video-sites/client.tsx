@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import React, { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
@@ -33,10 +33,27 @@ type Site = {
 };
 
 export default function VideoSitesClient({ sites }: { sites: Site[] }) {
+  const router = useRouter();
+  const [showQuickNvr, setShowQuickNvr] = useState(false);
+  const [showQuickCam, setShowQuickCam] = useState(false);
+  const [expandedSiteId, setExpandedSiteId] = useState<string | null>(null);
+
+  function refresh() {
+    router.refresh();
+  }
+
+  function focusSite(siteId: string) {
+    setExpandedSiteId(siteId);
+    // Scroll to the card after rerender.
+    requestAnimationFrame(() => {
+      document.getElementById(`site-${siteId}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
+
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <Video className="w-6 h-6" /> Obiective video
           </h1>
@@ -44,29 +61,272 @@ export default function VideoSitesClient({ sites }: { sites: Site[] }) {
             Pentru fiecare obiectiv: NVR-uri și camere IP. Adaugă, editează, configurează stream-urile pentru Video Wall.
           </p>
         </div>
-        <Link href="/sites/new"><Button>+ Obiectiv nou</Button></Link>
+        <div className="flex gap-2 flex-wrap">
+          <Button onClick={() => { setShowQuickNvr(v => !v); setShowQuickCam(false); }}>
+            <Plus className="w-4 h-4 mr-1" /> Adaugă NVR
+          </Button>
+          <Button variant="outline" onClick={() => { setShowQuickCam(v => !v); setShowQuickNvr(false); }}>
+            <Plus className="w-4 h-4 mr-1" /> Adaugă cameră IP
+          </Button>
+          <Link href="/sites/new"><Button variant="outline">+ Obiectiv nou</Button></Link>
+        </div>
       </div>
+
+      {showQuickNvr && (
+        sites.length === 0 ? (
+          <Card>
+            <CardContent className="p-4 text-sm text-muted-foreground">
+              Nu există încă niciun obiectiv. <Link href="/sites/new" className="text-blue-400 hover:underline">Crează un obiectiv</Link> mai întâi, apoi adaugi NVR-uri pe el.
+            </CardContent>
+          </Card>
+        ) : (
+          <QuickAddNvr
+            sites={sites.map(s => ({ id: s.id, label: `[${s.code}] ${s.name} — ${s.client.name}` }))}
+            onCancel={() => setShowQuickNvr(false)}
+            onCreated={(siteId) => { setShowQuickNvr(false); focusSite(siteId); refresh(); }}
+          />
+        )
+      )}
+
+      {showQuickCam && (
+        sites.length === 0 ? (
+          <Card>
+            <CardContent className="p-4 text-sm text-muted-foreground">
+              Nu există încă niciun obiectiv. <Link href="/sites/new" className="text-blue-400 hover:underline">Crează un obiectiv</Link> mai întâi.
+            </CardContent>
+          </Card>
+        ) : (
+          <QuickAddCamera
+            sites={sites.map(s => ({ id: s.id, label: `[${s.code}] ${s.name} — ${s.client.name}` }))}
+            onCancel={() => setShowQuickCam(false)}
+            onCreated={(siteId) => { setShowQuickCam(false); focusSite(siteId); refresh(); }}
+          />
+        )
+      )}
 
       {sites.length === 0 ? (
         <Card>
           <CardContent className="p-8 text-center text-muted-foreground">
-            Niciun obiectiv. <Link href="/sites/new" className="text-blue-400 hover:underline">Adaugă unul</Link>.
+            Niciun obiectiv. <Link href="/sites/new" className="text-blue-400 hover:underline">Crează unul</Link> și apoi adaugi NVR-uri și camere.
           </CardContent>
         </Card>
       ) : (
         <div className="space-y-4">
-          {sites.map(site => <SiteBlock key={site.id} site={site} />)}
+          {sites.map(site => (
+            <SiteBlock
+              key={site.id}
+              site={site}
+              forceOpen={expandedSiteId === site.id}
+            />
+          ))}
         </div>
       )}
     </div>
   );
 }
 
-function SiteBlock({ site }: { site: Site }) {
+// Top-level inline form: pick a site, fill NVR details, save.
+function QuickAddNvr({
+  sites, onCancel, onCreated,
+}: {
+  sites: { id: string; label: string }[];
+  onCancel: () => void;
+  onCreated: (siteId: string) => void;
+}) {
+  const [siteId, setSiteId] = useState(sites[0]?.id ?? "");
+  const [f, setF] = useState({
+    name: "",
+    brand: "",
+    model: "",
+    ipAddress: "",
+    webPort: 80,
+    rtspPort: 554,
+    username: "",
+    password: "",
+    channelsCount: 16,
+    notes: "",
+  });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const set = (k: keyof typeof f, v: string | number) => setF(s => ({ ...s, [k]: v }));
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!siteId) { setErr("Selectează un obiectiv"); return; }
+    setBusy(true); setErr(null);
+    const r = await fetch("/api/nvrs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ siteId, ...f }),
+    });
+    setBusy(false);
+    if (!r.ok) { setErr((await r.json().catch(() => ({}))).error || "Eroare"); return; }
+    onCreated(siteId);
+  }
+
+  return (
+    <Card className="border-blue-700/40">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base flex items-center gap-2">
+          <Server className="w-4 h-4 text-blue-400" /> NVR nou
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={submit} className="space-y-3">
+          <div>
+            <Label className="text-xs">Obiectiv (locația unde e instalat NVR-ul)</Label>
+            <Select value={siteId} onValueChange={setSiteId}>
+              <SelectTrigger><SelectValue placeholder="Alege obiectivul" /></SelectTrigger>
+              <SelectContent>
+                {sites.map(s => <SelectItem key={s.id} value={s.id}>{s.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+            <div>
+              <Label className="text-xs">Nume NVR</Label>
+              <Input value={f.name} onChange={e => set("name", e.target.value)} required placeholder="ex: NVR sediu central" />
+            </div>
+            <div>
+              <Label className="text-xs">Brand</Label>
+              <Select value={f.brand || "_"} onValueChange={v => set("brand", v === "_" ? "" : v)}>
+                <SelectTrigger><SelectValue placeholder="Alege" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="_">Altul / necunoscut</SelectItem>
+                  <SelectItem value="Hikvision">Hikvision</SelectItem>
+                  <SelectItem value="Dahua">Dahua</SelectItem>
+                  <SelectItem value="Uniview">Uniview</SelectItem>
+                  <SelectItem value="Axis">Axis</SelectItem>
+                  <SelectItem value="Milestone">Milestone</SelectItem>
+                  <SelectItem value="Bosch">Bosch</SelectItem>
+                  <SelectItem value="Hanwha">Hanwha</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs">Model</Label>
+              <Input value={f.model} onChange={e => set("model", e.target.value)} placeholder="ex: DS-7716NI-K4" />
+            </div>
+            <div className="md:col-span-2">
+              <Label className="text-xs">IP NVR (LAN sau VPN)</Label>
+              <Input value={f.ipAddress} onChange={e => set("ipAddress", e.target.value)} required placeholder="ex: 192.168.1.50 sau 10.10.0.5" />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <Label className="text-xs">Port web</Label>
+                <Input type="number" value={f.webPort} onChange={e => set("webPort", Number(e.target.value))} />
+              </div>
+              <div>
+                <Label className="text-xs">Port RTSP</Label>
+                <Input type="number" value={f.rtspPort} onChange={e => set("rtspPort", Number(e.target.value))} />
+              </div>
+            </div>
+            <div>
+              <Label className="text-xs">User NVR</Label>
+              <Input value={f.username} onChange={e => set("username", e.target.value)} placeholder="admin" autoComplete="off" />
+            </div>
+            <div>
+              <Label className="text-xs">Parolă NVR</Label>
+              <Input type="password" value={f.password} onChange={e => set("password", e.target.value)} autoComplete="new-password" />
+            </div>
+            <div>
+              <Label className="text-xs">Total canale</Label>
+              <Input type="number" min={1} max={128} value={f.channelsCount} onChange={e => set("channelsCount", Number(e.target.value))} />
+            </div>
+          </div>
+          <div>
+            <Label className="text-xs">Notițe (opțional)</Label>
+            <Textarea value={f.notes} onChange={e => set("notes", e.target.value)} rows={2} placeholder="ex: e în rack-ul din serverul de la etajul 1" />
+          </div>
+          {err && <div className="text-sm text-red-400">{err}</div>}
+          <div className="flex gap-2 flex-wrap">
+            <Button type="submit" disabled={busy}>{busy ? "Se salvează…" : "Adaugă NVR"}</Button>
+            <Button type="button" variant="outline" onClick={onCancel}>Anulează</Button>
+            <span className="text-xs text-muted-foreground self-center">După salvare poți importa automat toate canalele cu un singur click.</span>
+          </div>
+        </form>
+      </CardContent>
+    </Card>
+  );
+}
+
+// Top-level inline form: pick a site, fill camera details, save (no NVR).
+function QuickAddCamera({
+  sites, onCancel, onCreated,
+}: {
+  sites: { id: string; label: string }[];
+  onCancel: () => void;
+  onCreated: (siteId: string) => void;
+}) {
+  const [siteId, setSiteId] = useState(sites[0]?.id ?? "");
+  const [name, setName] = useState("");
+  const [rtspUrl, setRtspUrl] = useState("");
+  const [yoloEnabled, setYoloEnabled] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!siteId) { setErr("Selectează un obiectiv"); return; }
+    setBusy(true); setErr(null);
+    const r = await fetch("/api/cameras", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ siteId, name, rtspUrl, yoloEnabled, enabled: true }),
+    });
+    setBusy(false);
+    if (!r.ok) { setErr((await r.json().catch(() => ({}))).error || "Eroare"); return; }
+    onCreated(siteId);
+  }
+
+  return (
+    <Card className="border-blue-700/40">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base flex items-center gap-2">
+          <Video className="w-4 h-4 text-blue-400" /> Cameră IP nouă (fără NVR)
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={submit} className="space-y-3">
+          <div>
+            <Label className="text-xs">Obiectiv</Label>
+            <Select value={siteId} onValueChange={setSiteId}>
+              <SelectTrigger><SelectValue placeholder="Alege obiectivul" /></SelectTrigger>
+              <SelectContent>
+                {sites.map(s => <SelectItem key={s.id} value={s.id}>{s.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <Label className="text-xs">Nume cameră</Label>
+            <Input value={name} onChange={e => setName(e.target.value)} required placeholder="ex: Intrare principală" />
+          </div>
+          <div>
+            <Label className="text-xs">URL RTSP</Label>
+            <Input value={rtspUrl} onChange={e => setRtspUrl(e.target.value)} required placeholder="rtsp://user:pass@ip:554/..." />
+          </div>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={yoloEnabled} onChange={e => setYoloEnabled(e.target.checked)} /> YOLO human detection
+          </label>
+          {err && <div className="text-sm text-red-400">{err}</div>}
+          <div className="flex gap-2">
+            <Button type="submit" disabled={busy}>{busy ? "Se salvează…" : "Adaugă cameră"}</Button>
+            <Button type="button" variant="outline" onClick={onCancel}>Anulează</Button>
+          </div>
+        </form>
+      </CardContent>
+    </Card>
+  );
+}
+
+function SiteBlock({ site, forceOpen = false }: { site: Site; forceOpen?: boolean }) {
   const router = useRouter();
-  const [open, setOpen] = useState(site.nvrs.length > 0 || site.cameras.length > 0);
+  const [open, setOpen] = useState(forceOpen || site.nvrs.length > 0 || site.cameras.length > 0);
   const [addingNvr, setAddingNvr] = useState(false);
   const [addingCam, setAddingCam] = useState(false);
+
+  // Auto-expand when parent asks (after Quick-add focus).
+  React.useEffect(() => { if (forceOpen) setOpen(true); }, [forceOpen]);
 
   const camerasOfNvr = (nvrId: string) => site.cameras.filter(c => c.nvrId === nvrId);
   const directCameras = site.cameras.filter(c => !c.nvrId);
@@ -76,7 +336,7 @@ function SiteBlock({ site }: { site: Site }) {
   function refresh() { router.refresh(); }
 
   return (
-    <Card>
+    <Card id={`site-${site.id}`}>
       <CardHeader className="pb-3 cursor-pointer select-none" onClick={() => setOpen(o => !o)}>
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-2 min-w-0">
