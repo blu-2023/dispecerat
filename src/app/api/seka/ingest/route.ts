@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { parseContactId, getEventInfo, mapToIncidentType } from "@/lib/seka/contact-id";
+import { logIncidentAction, ActionKind } from "@/lib/incident-log";
 
 // Token-protected push endpoint for the SEKA TCP listener sidecar.
 //
@@ -105,6 +106,24 @@ export async function POST(req: NextRequest) {
         },
       });
       incidentId = inc.id;
+      // First timeline entry: SEKA event arrived, incident auto-created.
+      await logIncidentAction({
+        incidentId: inc.id,
+        userId: null, // system-generated
+        kind: ActionKind.SEKA_RECEIVED,
+        reason: `Alarmă SEKA auto-ingestată: ${info.label}`,
+        payload: {
+          eventCode: parsed.eventCode,
+          accountCode: parsed.accountCode,
+          zone: parsed.zone,
+          qualifier: parsed.qualifier,
+          severity: info.severity,
+          sekaEventId: sekaEvent.id,
+          receiverName: receiver.name,
+        },
+        remoteIp: req.headers.get("x-forwarded-for") || null,
+        userAgent: "seka-listener",
+      });
       await prisma.sekaEvent.update({
         where: { id: sekaEvent.id },
         data: { incidentId, status: "PROCESSED", processedAt: new Date() },

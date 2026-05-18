@@ -25,6 +25,7 @@ import {
 } from "@/lib/constants";
 import { renderTemplate } from "@/lib/email";
 import EmailSendDialog from "@/components/incidents/EmailSendDialog";
+import IncidentTimeline from "@/components/incidents/IncidentTimeline";
 
 export const dynamic = "force-dynamic";
 
@@ -286,6 +287,8 @@ export default async function IncidentDetailPage({
           )}
         </CardContent>
       </Card>
+
+      <IncidentTimeline incidentId={incident.id} />
     </div>
   );
 }

@@ -53,6 +53,7 @@ model User {
   createdIncidents  Incident[]   @relation("CreatedBy")
   assignedIncidents Incident[]   @relation("AssignedTo")
   auditLogs         AuditLog[]
+  incidentActions   IncidentAction[]
 }
 
 model Client {
@@ -244,6 +245,36 @@ model Incident {
   createdBy    User            @relation("CreatedBy", fields: [createdById], references: [id])
   assignedTo   User?           @relation("AssignedTo", fields: [assignedToId], references: [id])
   emails       IncidentEmail[]
+  actions      IncidentAction[]
+}
+
+// Every operator interaction with an incident gets logged here.
+// Used for post-incident "replay" — exact chronology of who did what.
+// Critical for investigations, audits, and client disputes.
+model IncidentAction {
+  id          String   @id @default(cuid())
+  incidentId  String
+  userId      String?   // null = system-generated (auto)
+  kind        String    // VIEW | OPEN_STREAM | ACK | ESCALATE | NOTE | CALL | EMAIL_SENT | STATUS_CHANGE | ASSIGN | MUTE | UNMUTE | YOLO_VERIFIED | SEKA_RECEIVED | etc.
+  // Free-text human reason / context (operator-typed: e.g. "Sunt sigur, am sunat clientul, e false alarm")
+  reason      String?
+  // Structured payload, JSON. Examples:
+  //   OPEN_STREAM: { cameraId, cameraName }
+  //   STATUS_CHANGE: { from, to }
+  //   CALL: { phone, duration_sec, outcome }
+  //   EMAIL_SENT: { to, subject, templateId }
+  //   NOTE: { text }
+  payload     String?  // JSON serialized
+  // IP + user agent for forensic trail
+  remoteIp    String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  incident    Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([incidentId, createdAt])
+  @@index([userId, createdAt])
 }
 
 model IncidentEmail {
