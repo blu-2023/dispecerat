@@ -1,0 +1,92 @@
+# mediamtx.template.yml — CONFIG TEMPLATE pentru capture card PC.
+#
+# Înlocuiește "NUME_CAPTURE_CARD_AICI" cu numele EXACT raportat de
+# `.\01-list-devices.ps1`. De obicei suntem capture cards cu 2 canale
+# care expun fiecare ca dispozitiv separat (chan 1, chan 2), sau ca un
+# singur dispozitiv cu multiple pinuri.
+
+# Pune fișierul ÎNAINTE de cel original: cp mediamtx.template.yml mediamtx.yml
+
+###############################################################################
+# Setări server
+###############################################################################
+rtspAddress: :8554
+rtspTransports: [tcp, udp]
+hlsDisable: yes
+webrtcDisable: yes
+metricsDisable: yes
+pprofDisable: yes
+playbackDisable: yes
+api: no
+
+# Auth optional — recomandat pentru producție (acum off ca să fie simplu)
+authMethod: internal
+authInternalUsers:
+  - user: any
+    pass:
+    ips: []
+    permissions:
+      - action: publish
+      - action: read
+      - action: playback
+      - action: api
+      - action: metrics
+      - action: pprof
+
+###############################################################################
+# Path-uri RTSP — DOUĂ CAMERE
+###############################################################################
+paths:
+
+  # ----------- CANAL 1 -----------
+  cam1:
+    # Pornește ffmpeg automat la startup pentru camera 1.
+    # Înlocuiește "NUME_CAPTURE_CARD_AICI" cu numele raportat de 01-list-devices.
+    # Dacă ai 2 dispozitive separate (per canal), schimbi numele.
+    # Dacă ai 1 dispozitiv cu pinuri multiple, adaugi ":video_pin_name=Composite 1" etc.
+    runOnInit: >-
+      ffmpeg
+      -hide_banner -loglevel warning
+      -f dshow
+      -rtbufsize 100M
+      -i video="NUME_CAPTURE_CARD_AICI"
+      -c:v libx264 -preset ultrafast -tune zerolatency
+      -b:v 1500k -maxrate 1800k -bufsize 3M
+      -pix_fmt yuv420p
+      -g 30
+      -an
+      -f rtsp -rtsp_transport tcp
+      rtsp://localhost:8554/cam1
+    runOnInitRestart: yes
+
+  # ----------- CANAL 2 -----------
+  cam2:
+    runOnInit: >-
+      ffmpeg
+      -hide_banner -loglevel warning
+      -f dshow
+      -rtbufsize 100M
+      -i video="NUME_AL_DOILEA_CAPTURE_CARD"
+      -c:v libx264 -preset ultrafast -tune zerolatency
+      -b:v 1500k -maxrate 1800k -bufsize 3M
+      -pix_fmt yuv420p
+      -g 30
+      -an
+      -f rtsp -rtsp_transport tcp
+      rtsp://localhost:8554/cam2
+    runOnInitRestart: yes
+
+###############################################################################
+# Note pentru depanare
+###############################################################################
+# - Dacă softul Intotech ține capture card-ul EXCLUSIV → ffmpeg dă eroare
+#   "I/O error" sau "Could not open device". Soluții:
+#   a) Oprește Intotech temporar și testează
+#   b) Folosește OBS Studio cu plugin RTSP server (alternativă)
+#   c) Capture screen al ferestrei Intotech (gdigrab) — vezi 03-screen-capture.ps1
+#
+# - Pentru testare manuală a unei surse:
+#     ffmpeg -f dshow -i video="NUME" -t 5 -f null -
+#
+# - Pentru a vedea pinurile disponibile (dacă device-ul are mai multe intrări):
+#     ffmpeg -f dshow -list_options true -i video="NUME"
