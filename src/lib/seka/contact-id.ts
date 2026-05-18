@@ -146,9 +146,11 @@ export function parseContactId(raw: string): ContactIdEvent | null {
   // Remove any brackets, spaces normalization
   const clean = raw.replace(/[\[\]]/g, "").trim();
 
-  // Try standard format: ACCT MT QXYZ GG CCC
+  // Standard format: ACCT MT QXYZ GG CCC
+  // ACCT can be HEX (Sempral GPRS uses 6-char hex like "012D33") OR pure digits (PSTN/older)
+  // The rest are pure digits.
   const match = clean.match(
-    /(\d{3,6})\s*(\d{2})\s*(\d)(\d{3})\s*(\d{2})\s*(\d{3})/
+    /([0-9A-Fa-f]{3,8})\s*(\d{2})\s*(\d)(\d{3})\s*(\d{2})\s*(\d{3})/
   );
 
   if (!match) return null;
