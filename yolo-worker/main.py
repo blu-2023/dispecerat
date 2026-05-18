@@ -82,6 +82,18 @@ clients_lock = threading.Lock()
 loop_ref: asyncio.AbstractEventLoop = None  # set by main()
 event_queue: "asyncio.Queue[dict]" = None
 camera_threads: dict[str, "CameraThread"] = {}
+
+# AI verification — post-event clip analysis.
+# When a CameraThread detects something, it pushes a job here instead of
+# emitting the alert directly. The VerifierThread opens a NEW VideoCapture
+# on the same RTSP, samples N frames over D seconds, classifies each,
+# and emits the alert only if a majority confirms.
+import queue
+verification_queue: "queue.Queue[dict]" = queue.Queue(maxsize=200)
+VERIFY_DURATION = float(os.environ.get("YOLO_VERIFY_SECONDS", "8"))   # how long to observe
+VERIFY_FRAMES = int(os.environ.get("YOLO_VERIFY_FRAMES", "12"))      # how many samples
+VERIFY_THRESHOLD = float(os.environ.get("YOLO_VERIFY_THRESHOLD", "0.50"))  # min fraction of frames that must agree
+VERIFY_HIGH_CONF = float(os.environ.get("YOLO_VERIFY_HIGH_CONF", "0.55"))  # per-frame confidence threshold
 model = None
 
 
@@ -110,6 +122,173 @@ def save_snapshot(camera_id: str, frame) -> str | None:
         return str(fname)
     except Exception:
         return None
+
+
+class VerifierThread(threading.Thread):
+    """Consumes detection jobs, classifies clip, emits only verified alerts.
+
+    A job = { cameraId, rtspUrl, alarmType, primary_label, primary_confidence, snapshot_path }
+    Output via push(ev) — same shape as before, plus verification metadata.
+    """
+    def __init__(self, push):
+        super().__init__(daemon=True, name="verifier")
+        self.push = push
+        self.stopped = False
+
+    def stop(self):
+        self.stopped = True
+
+    def run(self):
+        LOG.info("verifier thread started (frames=%d duration=%.1fs threshold=%.2f)",
+                 VERIFY_FRAMES, VERIFY_DURATION, VERIFY_THRESHOLD)
+        while not self.stopped:
+            try:
+                job = verification_queue.get(timeout=1)
+            except queue.Empty:
+                continue
+            try:
+                self._verify(job)
+            except Exception as e:
+                LOG.exception("verifier crashed on %s: %s", job.get("cameraId"), e)
+
+    def _verify(self, job: dict):
+        cam_id = job["cameraId"]
+        rtsp = job["rtspUrl"]
+        alarm_type = job.get("alarmType", "person")
+        primary_label = job.get("primary_label", "object")
+
+        if alarm_type == "person":
+            yolo_classes = [0]
+        elif alarm_type == "vehicle":
+            yolo_classes = [1, 2, 3, 5, 7]
+        elif alarm_type == "both":
+            yolo_classes = [0, 1, 2, 3, 5, 7]
+        else:
+            yolo_classes = [0, 1, 2, 3, 5, 7, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+
+        LABELS = {0: "person", 1: "bicycle", 2: "car", 3: "motorcycle", 5: "bus", 7: "truck",
+                  14: "bird", 15: "cat", 16: "dog", 17: "horse", 18: "sheep", 19: "cow",
+                  20: "elephant", 21: "bear", 22: "zebra", 23: "giraffe"}
+        ANIMAL_IDS = {14, 15, 16, 17, 18, 19, 20, 21, 22, 23}
+        PERSON_IDS = {0}
+        VEHICLE_IDS = {1, 2, 3, 5, 7}
+
+        # Open a fresh capture (don't compete with main detection loop)
+        cap = cv2.VideoCapture(rtsp)
+        if not cap.isOpened():
+            LOG.warning("verifier could not open %s — suppressing alert", cam_id)
+            return
+
+        interval = VERIFY_DURATION / max(1, VERIFY_FRAMES)
+        start = time.time()
+        counts = {"person": 0, "vehicle": 0, "animal": 0, "other": 0, "empty": 0}
+        per_frame: list[dict] = []
+        best_frame = None
+        best_conf = 0.0
+        best_label_seen = None
+
+        for i in range(VERIFY_FRAMES):
+            if self.stopped: break
+            ok, frame = cap.read()
+            if not ok:
+                counts["empty"] += 1
+                time.sleep(interval)
+                continue
+            try:
+                results = model.predict(source=frame, conf=0.30, device=DEVICE,
+                                        verbose=False, classes=yolo_classes)
+            except Exception as e:
+                LOG.warning("verifier inference err %s: %s", cam_id, e)
+                counts["empty"] += 1
+                time.sleep(interval)
+                continue
+
+            # Aggregate per-frame: best class
+            frame_best_cls = None
+            frame_best_conf = 0.0
+            for r in results:
+                for box in r.boxes:
+                    conf = float(box.conf.item())
+                    if conf < VERIFY_HIGH_CONF: continue
+                    cls_id = int(box.cls.item())
+                    if conf > frame_best_conf:
+                        frame_best_conf = conf
+                        frame_best_cls = cls_id
+            if frame_best_cls is None:
+                counts["empty"] += 1
+                per_frame.append({"i": i, "cls": None})
+            else:
+                lbl = LABELS.get(frame_best_cls, f"cls_{frame_best_cls}")
+                if frame_best_cls in PERSON_IDS: counts["person"] += 1
+                elif frame_best_cls in VEHICLE_IDS: counts["vehicle"] += 1
+                elif frame_best_cls in ANIMAL_IDS: counts["animal"] += 1
+                else: counts["other"] += 1
+                per_frame.append({"i": i, "cls": lbl, "conf": round(frame_best_conf, 3)})
+                if frame_best_conf > best_conf:
+                    best_conf = frame_best_conf
+                    best_label_seen = lbl
+                    best_frame = frame
+            time.sleep(interval)
+
+        try: cap.release()
+        except Exception: pass
+
+        total = sum(counts.values()) or 1
+        non_empty = total - counts["empty"]
+        elapsed = time.time() - start
+
+        # Pick majority category among non-empty frames
+        majority_category = None
+        majority_count = 0
+        for cat in ("person", "vehicle", "animal", "other"):
+            if counts[cat] > majority_count:
+                majority_count = counts[cat]
+                majority_category = cat
+
+        # Decision: alert only if majority >= threshold of total samples AND matches alarmType (or both)
+        confirmed = False
+        verdict_label = None
+        if non_empty >= 2 and majority_category and majority_category != "empty":
+            ratio = majority_count / total
+            if ratio >= VERIFY_THRESHOLD:
+                if alarm_type == "person" and majority_category == "person":
+                    confirmed = True; verdict_label = "person"
+                elif alarm_type == "vehicle" and majority_category == "vehicle":
+                    confirmed = True; verdict_label = "vehicle"
+                elif alarm_type == "both" and majority_category in ("person", "vehicle"):
+                    confirmed = True; verdict_label = majority_category
+                elif alarm_type == "motion":
+                    confirmed = True; verdict_label = majority_category
+
+        if not confirmed:
+            LOG.info("VERIFIED-SUPPRESSED %s: %s (counts=%s, elapsed=%.1fs) — would have been false alert",
+                     cam_id, primary_label, counts, elapsed)
+            return
+
+        # Save the best frame as verified snapshot (overwrites primary if higher conf)
+        snap = save_snapshot(cam_id, best_frame) if best_frame is not None else job.get("snapshot_path")
+
+        ev = {
+            "cameraId": cam_id,
+            "label": verdict_label or best_label_seen or primary_label,
+            "confidence": round(best_conf, 3),
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "snapshotPath": snap,
+            # AI verification metadata
+            "verification": {
+                "verified": True,
+                "category": majority_category,
+                "counts": counts,
+                "frames": VERIFY_FRAMES,
+                "duration_sec": round(elapsed, 1),
+                "ratio": round(majority_count / total, 3),
+                "primary_label": primary_label,
+                "per_frame": per_frame[:20],
+            },
+        }
+        LOG.info("VERIFIED-ALERT %s: %s (counts=%s, ratio=%.2f, conf=%.2f, elapsed=%.1fs)",
+                 cam_id, verdict_label, counts, majority_count / total, best_conf, elapsed)
+        self.push(ev)
 
 
 class CameraThread(threading.Thread):
@@ -250,15 +429,32 @@ class CameraThread(threading.Thread):
             if consecutive_hits >= REQUIRED_HITS and now - last_emit > COOLDOWN:
                 last_emit = time.time()
                 snap = save_snapshot(cam_id, frame)
-                ev = {
+                # Hand off to AI verifier (post-event clip analysis).
+                # The verifier opens its own VideoCapture, samples N frames over
+                # D seconds, classifies, votes — only then emits the alert.
+                # If queue is full, fall back to direct emit so we don't drop.
+                job = {
                     "cameraId": cam_id,
-                    "label": best_label,
-                    "confidence": round(best, 3),
-                    "ts": datetime.now(timezone.utc).isoformat(),
-                    "snapshotPath": snap,
+                    "rtspUrl": rtsp,
+                    "alarmType": alarm_type,
+                    "primary_label": best_label,
+                    "primary_confidence": round(best, 3),
+                    "snapshot_path": snap,
                 }
-                LOG.info("DETECT %s %s conf=%.2f hits=%d", cam_id, best_label, best, consecutive_hits)
-                self.push(ev)
+                try:
+                    verification_queue.put_nowait(job)
+                    LOG.info("DETECT-PENDING %s %s conf=%.2f hits=%d → queued for verification",
+                             cam_id, best_label, best, consecutive_hits)
+                except queue.Full:
+                    LOG.warning("verification queue full — emitting direct (unverified) %s", cam_id)
+                    self.push({
+                        "cameraId": cam_id,
+                        "label": best_label,
+                        "confidence": round(best, 3),
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "snapshotPath": snap,
+                        "verification": {"verified": False, "reason": "queue_full"},
+                    })
                 # Reset hit counter after emitting to require fresh confirmation
                 consecutive_hits = 0
         try:
@@ -336,6 +532,12 @@ async def main():
 
     asyncio.create_task(broadcaster())
     asyncio.create_task(reload_loop())
+
+    # Start verifier thread (consumes verification_queue)
+    push = push_factory()
+    verifier = VerifierThread(push)
+    verifier.start()
+
     LOG.info("ws server on %s:%d", WS_HOST, WS_PORT)
     async with websockets.serve(ws_handler, WS_HOST, WS_PORT):
         await asyncio.Future()
