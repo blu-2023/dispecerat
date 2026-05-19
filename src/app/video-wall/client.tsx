@@ -42,39 +42,65 @@ export default function VideoWallClient({
       host = `${window.location.hostname}:4011`;
     }
     const wsScheme = window.location.protocol === "https:" ? "wss" : "ws";
-    return `${wsScheme}://${host}/ws/${encodeURIComponent(cameraId)}`;
+    // mode=wall → proxy uses smaller scale / fps / bitrate (better for many tiles)
+    return `${wsScheme}://${host}/ws/${encodeURIComponent(cameraId)}?mode=wall`;
   }
 
   useEffect(() => {
     if (!libReady) return;
     if (!window.mpegts?.isSupported()) return;
-    for (const c of cameras) {
+
+    const timeouts: ReturnType<typeof setTimeout>[] = [];
+
+    // Stagger startup — opening 30 RTSP connections simultaneously overwhelms
+    // both the DVR (parallel-connection limits) and the browser MSE decoder.
+    // 350ms apart is comfortable: 30 cams take ~10s to fully boot.
+    const STAGGER_MS = 350;
+
+    function startPlayer(c: Camera, retryCount = 0) {
       const video = videoRefs.current[c.id];
-      if (!video) continue;
-      if (playersRef.current[c.id]) continue;
+      if (!video) return;
+      if (playersRef.current[c.id]) return; // already running
+
       try {
-        const player = window.mpegts.createPlayer(
+        const player = window.mpegts!.createPlayer(
           { type: "mpegts", isLive: true, url: proxyUrl(c.id) },
           {
             enableWorker: true,
             enableStashBuffer: false,
-            stashInitialSize: 128,
+            stashInitialSize: 64,
             liveBufferLatencyChasing: true,
-            liveBufferLatencyMaxLatency: 2.5,
-            liveBufferLatencyMinRemain: 0.3,
+            liveBufferLatencyMaxLatency: 3.0,
+            liveBufferLatencyMinRemain: 0.5,
             autoCleanupSourceBuffer: true,
           }
         );
         player.attachMediaElement(video);
         player.load();
         player.play().catch(() => {});
-        player.on("error", (...args) => console.warn("mpegts err", c.id, args));
+        player.on("error", () => {
+          // Destroy + retry after delay (max 5 retries)
+          try { player.destroy(); } catch {}
+          delete playersRef.current[c.id];
+          if (retryCount < 5) {
+            const backoff = 2000 + retryCount * 2000;
+            const t = setTimeout(() => startPlayer(c, retryCount + 1), backoff);
+            timeouts.push(t);
+          }
+        });
         playersRef.current[c.id] = player;
       } catch (e) {
         console.error("mpegts init failed", c.id, e);
       }
     }
+
+    cameras.forEach((c, idx) => {
+      const t = setTimeout(() => startPlayer(c), idx * STAGGER_MS);
+      timeouts.push(t);
+    });
+
     return () => {
+      timeouts.forEach(clearTimeout);
       for (const id of Object.keys(playersRef.current)) {
         try { playersRef.current[id].destroy(); } catch {}
       }
@@ -137,11 +163,17 @@ export default function VideoWallClient({
                 <>
                   <video
                     ref={(el) => { videoRefs.current[cam.id] = el; }}
-                    style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                    className="cam-video"
+                    style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", background: "#000" }}
                     muted
                     playsInline
                     autoPlay
+                    onCanPlay={(e) => { (e.target as HTMLVideoElement).dataset.ready = "1"; }}
                   />
+                  {/* Loading overlay: hidden once video has data-ready="1" via sibling selector */}
+                  <div className="cam-loading absolute inset-0 flex items-center justify-center pointer-events-none text-neutral-500 text-xs">
+                    <div className="bg-black/70 px-2 py-1 rounded">Conectare…</div>
+                  </div>
                   <div className="absolute left-1 bottom-1 px-1.5 py-0.5 rounded text-[11px] bg-black/60 text-white">
                     {cam.siteLabel} · {cam.name}
                   </div>
@@ -168,6 +200,7 @@ export default function VideoWallClient({
       </div>
       <style>{`
         @keyframes wallpulse { 0% { outline-color: #dc2626; } 50% { outline-color: #fca5a5; } 100% { outline-color: #dc2626; } }
+        .cam-video[data-ready="1"] ~ .cam-loading { display: none; }
       `}</style>
     </>
   );

@@ -40,16 +40,25 @@ async function loadCameras() {
   }
 }
 
-function startCamera(cameraId, rtspUrl) {
+function startCamera(cameraId, rtspUrl, mode = "default") {
   if (procs.has(cameraId)) return procs.get(cameraId);
-  console.log(`[proxy] starting ffmpeg for ${cameraId}`);
+  console.log(`[proxy] starting ffmpeg for ${cameraId} (mode=${mode})`);
   // H.264 in MPEG-TS over WebSocket → browser decodes natively via mpegts.js + MSE.
   // libx264 ultrafast + zerolatency tuning trades small CPU for low latency.
-  // Tweak SCALE/BITRATE via env vars for per-deployment tuning.
-  const SCALE = process.env.STREAM_SCALE || "scale=854:-2";   // 480p-ish width
-  const FPS = process.env.STREAM_FPS || "15";
-  const BITRATE = process.env.STREAM_BITRATE || "500k";
-  const GOP = process.env.STREAM_GOP || "30";  // keyframe every 2s @ 15fps
+  // 3 profiles: default (single-cam live), wall (many tiles, light), preview.
+  let SCALE, FPS, BITRATE, GOP;
+  if (mode === "wall") {
+    // Many tiles → small + low bandwidth
+    SCALE = process.env.STREAM_SCALE_WALL || "scale=480:-2";
+    FPS   = process.env.STREAM_FPS_WALL   || "10";
+    BITRATE = process.env.STREAM_BITRATE_WALL || "250k";
+    GOP   = process.env.STREAM_GOP_WALL || "20";
+  } else {
+    SCALE = process.env.STREAM_SCALE || "scale=854:-2";
+    FPS = process.env.STREAM_FPS || "15";
+    BITRATE = process.env.STREAM_BITRATE || "500k";
+    GOP = process.env.STREAM_GOP || "30";
+  }
 
   const ff = spawn("ffmpeg", [
     "-rtsp_transport", "tcp",
@@ -77,7 +86,7 @@ function startCamera(cameraId, rtspUrl) {
     "-",
   ], { stdio: ["ignore", "pipe", "pipe"] });
 
-  const entry = { ff, rtspUrl, clients: new Set() };
+  const entry = { ff, rtspUrl, mode, clients: new Set() };
   procs.set(cameraId, entry);
 
   ff.stdout.on("data", (chunk) => {
@@ -115,7 +124,7 @@ function startCamera(cameraId, rtspUrl) {
   return entry;
 }
 
-async function ensureCameraStarted(cameraId, fallbackRtsp) {
+async function ensureCameraStarted(cameraId, fallbackRtsp, mode = "default") {
   if (procs.has(cameraId)) return procs.get(cameraId);
   let rtspUrl = fallbackRtsp || cameraCache.get(cameraId);
   if (!rtspUrl && Date.now() - cacheLoaded > 60000) {
@@ -123,7 +132,7 @@ async function ensureCameraStarted(cameraId, fallbackRtsp) {
     rtspUrl = cameraCache.get(cameraId);
   }
   if (!rtspUrl) return null;
-  return startCamera(cameraId, rtspUrl);
+  return startCamera(cameraId, rtspUrl, mode);
 }
 
 // ---- HTTP server ----
@@ -150,7 +159,8 @@ const server = http.createServer(async (req, res) => {
   const m = url.pathname.match(/^\/stream\/([^/]+)$/);
   if (!m) { res.writeHead(404); res.end("not found"); return; }
   const cameraId = decodeURIComponent(m[1]);
-  const entry = await ensureCameraStarted(cameraId, url.searchParams.get("rtsp"));
+  const mode = url.searchParams.get("mode") || "default";
+  const entry = await ensureCameraStarted(cameraId, url.searchParams.get("rtsp"), mode);
   if (!entry) { res.writeHead(404); res.end("camera not found"); return; }
 
   res.writeHead(200, {
@@ -179,7 +189,8 @@ server.on("upgrade", async (req, socket, head) => {
   const m = url.pathname.match(/^\/ws\/([^/]+)$/);
   if (!m) { socket.destroy(); return; }
   const cameraId = decodeURIComponent(m[1]);
-  const entry = await ensureCameraStarted(cameraId, url.searchParams.get("rtsp"));
+  const mode = url.searchParams.get("mode") || "default";
+  const entry = await ensureCameraStarted(cameraId, url.searchParams.get("rtsp"), mode);
   if (!entry) { socket.destroy(); return; }
 
   wss.handleUpgrade(req, socket, head, (ws) => {
