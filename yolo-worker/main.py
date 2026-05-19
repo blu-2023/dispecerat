@@ -173,11 +173,24 @@ class VerifierThread(threading.Thread):
         PERSON_IDS = {0}
         VEHICLE_IDS = {1, 2, 3, 5, 7}
 
-        # Open a fresh capture (don't compete with main detection loop)
-        cap = cv2.VideoCapture(rtsp)
+        # Open a fresh capture for verification. Use SUB-stream to avoid hammering
+        # the DVR with multiple HD-mainstream connections (some DVRs limit to 4-8
+        # parallel clients per channel). For Hikvision URLs like /Streaming/Channels/N01
+        # the equivalent substream is /Streaming/Channels/N02. Dahua substream is subtype=1.
+        verify_rtsp = rtsp
+        # Hikvision: change last digit 1→2 in /Channels/NN01
+        import re as _re
+        verify_rtsp = _re.sub(r'(/Streaming/Channels/\d+)01(?=\b|$)', r'\g<1>02', verify_rtsp)
+        # Dahua: subtype=0 → subtype=1
+        verify_rtsp = _re.sub(r'subtype=0\b', 'subtype=1', verify_rtsp)
+
+        cap = cv2.VideoCapture(verify_rtsp)
         if not cap.isOpened():
-            LOG.warning("verifier could not open %s — suppressing alert", cam_id)
-            return
+            LOG.warning("verifier could not open %s — trying mainstream fallback", cam_id)
+            cap = cv2.VideoCapture(rtsp)
+            if not cap.isOpened():
+                LOG.warning("verifier could not open %s on either stream — suppressing alert", cam_id)
+                return
 
         interval = VERIFY_DURATION / max(1, VERIFY_FRAMES)
         start = time.time()

@@ -36,6 +36,7 @@ model Organization {
   cameras        Camera[]
   wallPages      WallPage[]
   nvrs           Nvr[]
+  tickets        Ticket[]
 }
 
 model User {
@@ -54,6 +55,9 @@ model User {
   assignedIncidents Incident[]   @relation("AssignedTo")
   auditLogs         AuditLog[]
   incidentActions   IncidentAction[]
+  createdTickets    Ticket[]     @relation("TicketCreatedBy")
+  assignedTickets   Ticket[]     @relation("TicketAssignedTo")
+  ticketComments    TicketComment[]
 }
 
 model Client {
@@ -115,6 +119,7 @@ model Site {
   cameras      Camera[]
   wallPages    WallPageSite[]
   nvrs         Nvr[]
+  tickets      Ticket[]
 }
 
 model Camera {
@@ -147,6 +152,7 @@ model Camera {
   site         Site             @relation(fields: [siteId], references: [id], onDelete: Cascade)
   nvr          Nvr?             @relation(fields: [nvrId], references: [id], onDelete: SetNull)
   detections   CameraDetection[]
+  tickets      Ticket[]
 }
 
 // NVR / DVR — physical Network Video Recorder at a site.
@@ -172,6 +178,7 @@ model Nvr {
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   site         Site         @relation(fields: [siteId], references: [id], onDelete: Cascade)
   cameras      Camera[]
+  tickets      Ticket[]
 }
 
 model CameraDetection {
@@ -246,6 +253,7 @@ model Incident {
   assignedTo   User?           @relation("AssignedTo", fields: [assignedToId], references: [id])
   emails       IncidentEmail[]
   actions      IncidentAction[]
+  tickets      Ticket[]
 }
 
 // Every operator interaction with an incident gets logged here.
@@ -362,4 +370,73 @@ model SekaEvent {
   organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   receiver     SekaReceiver  @relation(fields: [receiverId], references: [id], onDelete: Cascade)
   site         Site?         @relation(fields: [siteId], references: [id])
+}
+
+// === Tickete echipă tehnică ===
+// Dispecerul deschide un ticket când are nevoie de intervenție tehnică
+// (cameră offline, NVR căzut, SEKA problemă, conexiune VPN etc).
+// Echipa tehnică îl preia, rezolvă și-l închide. Toate acțiunile
+// sunt logate în istoric, vizibile și în Incident.replay (dacă e legat).
+model Ticket {
+  id             String   @id @default(cuid())
+  organizationId String
+  // Tip problemă — folosit pentru filtre și pentru rutare automată
+  category       String   // CAMERA_OFFLINE | NVR_ISSUE | SEKA_ISSUE | NETWORK | VPN | SOFTWARE | OTHER
+  // Niveluri de prioritate
+  priority       String   @default("NORMAL") // LOW | NORMAL | HIGH | CRITICAL
+  // Stare
+  status         String   @default("OPEN")   // OPEN | ACKNOWLEDGED | IN_PROGRESS | RESOLVED | CLOSED | CANCELLED
+  title          String
+  description    String
+
+  // Legături opționale: incident, obiectiv, cameră, NVR
+  incidentId     String?
+  siteId         String?
+  cameraId       String?
+  nvrId          String?
+
+  createdById    String
+  assignedToId   String?   // tehnicianul căruia i s-a alocat
+
+  // Trace de viață
+  acknowledgedAt DateTime?
+  inProgressAt   DateTime?
+  resolvedAt     DateTime?
+  closedAt       DateTime?
+  // Persoană care a închis ticket-ul (poate fi alta decât assignedTo)
+  closedById     String?
+
+  // Soluție/rezoluție (text liber introdus la închidere)
+  resolution     String?
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User         @relation("TicketCreatedBy", fields: [createdById], references: [id])
+  assignedTo   User?        @relation("TicketAssignedTo", fields: [assignedToId], references: [id])
+  incident     Incident?    @relation(fields: [incidentId], references: [id], onDelete: SetNull)
+  site         Site?        @relation(fields: [siteId], references: [id], onDelete: SetNull)
+  camera       Camera?      @relation(fields: [cameraId], references: [id], onDelete: SetNull)
+  nvr          Nvr?         @relation(fields: [nvrId], references: [id], onDelete: SetNull)
+  comments     TicketComment[]
+
+  @@index([organizationId, status])
+  @@index([assignedToId, status])
+  @@index([createdAt])
+}
+
+model TicketComment {
+  id        String   @id @default(cuid())
+  ticketId  String
+  userId    String
+  body      String
+  // Marchează schimbarea de status în comentariu (pentru istoric)
+  statusChange String?  // ex: "OPEN→IN_PROGRESS"
+  createdAt DateTime @default(now())
+
+  ticket    Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@index([ticketId, createdAt])
 }

@@ -19,6 +19,7 @@ import {
   MonitorPlay,
   Video,
   Download,
+  Wrench,
 } from "lucide-react";
 
 const navigation = [
@@ -28,6 +29,7 @@ const navigation = [
   { name: "NVR-uri & obiective", href: "/video-sites", icon: Camera },
   { name: "Sesizare nouă", href: "/incidents/new", icon: AlertTriangle },
   { name: "Sesizări", href: "/incidents", icon: ScrollText },
+  { name: "Tickete tehnice", href: "/tickets", icon: Wrench },
   { name: "Clienți", href: "/clients", icon: Users },
   { name: "Obiective", href: "/sites", icon: Building2 },
   { name: "Template-uri", href: "/templates", icon: Mail },

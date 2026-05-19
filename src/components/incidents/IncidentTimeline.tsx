@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -9,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Activity, Eye, Video, Phone, Mail, MessageSquare, AlertTriangle, CheckCircle2,
-  RotateCcw, UserPlus, Clock, Radio, Camera, Bell, Lock, Unlock,
+  RotateCcw, UserPlus, Clock, Radio, Camera, Bell, Lock, Unlock, Wrench,
 } from "lucide-react";
 
 type Action = {
@@ -51,6 +52,7 @@ const KIND_ICONS: Record<string, React.ElementType> = {
   ESCALATE: AlertTriangle, CLOSE: Lock, REOPEN: Unlock, MUTE: Bell,
   UNMUTE: Bell, YOLO_VERIFIED: Camera, SEKA_RECEIVED: Radio,
   SNAPSHOT_VIEWED: Eye,
+  TICKET_OPENED: Wrench, TICKET_RESOLVED: CheckCircle2, TICKET_CLOSED: Lock, TICKET_UPDATE: Wrench,
 };
 const KIND_COLORS: Record<string, string> = {
   VIEW: "text-neutral-400", OPEN_STREAM: "text-blue-300",
@@ -59,6 +61,8 @@ const KIND_COLORS: Record<string, string> = {
   CALL: "text-pink-300", EMAIL_SENT: "text-orange-300",
   ESCALATE: "text-red-300", CLOSE: "text-slate-300", REOPEN: "text-yellow-300",
   YOLO_VERIFIED: "text-green-400", SEKA_RECEIVED: "text-orange-400",
+  TICKET_OPENED: "text-blue-400", TICKET_RESOLVED: "text-green-400",
+  TICKET_CLOSED: "text-slate-400", TICKET_UPDATE: "text-blue-300",
 };
 const KIND_LABELS: Record<string, string> = {
   VIEW: "Vizualizare", OPEN_STREAM: "Deschis stream cameră",
@@ -69,6 +73,8 @@ const KIND_LABELS: Record<string, string> = {
   MUTE: "Mute camera", UNMUTE: "Unmute camera",
   YOLO_VERIFIED: "AI confirmat", SEKA_RECEIVED: "Alarmă SEKA primită",
   SNAPSHOT_VIEWED: "Vizualizat snapshot",
+  TICKET_OPENED: "Ticket tehnic deschis", TICKET_RESOLVED: "Ticket rezolvat",
+  TICKET_CLOSED: "Ticket închis", TICKET_UPDATE: "Update ticket",
 };
 const STATUS_OPTIONS = ["NEW", "IN_PROGRESS", "SENT", "CONFIRMED", "CLOSED", "CANCELLED"];
 
@@ -166,6 +172,11 @@ export default function IncidentTimeline({ incidentId }: { incidentId: string })
             <Button size="sm" variant="outline" onClick={() => postAction("ESCALATE", "Escaladat către șeful de tură")} disabled={busy}>
               <AlertTriangle className="w-4 h-4 mr-1" /> Escaladează
             </Button>
+            <Link href={`/tickets/new?incidentId=${incidentId}&category=SEKA_ISSUE&title=${encodeURIComponent("Incident " + incidentId.slice(-6) + " — necesită echipa tehnică")}`}>
+              <Button size="sm" variant="outline" disabled={busy}>
+                <Wrench className="w-4 h-4 mr-1" /> Solicită echipa tehnică
+              </Button>
+            </Link>
             <Button size="sm" variant="outline" onClick={() => postAction("CLOSE", "Închis după rezolvare")} disabled={busy}>
               <Lock className="w-4 h-4 mr-1" /> Închide
             </Button>
