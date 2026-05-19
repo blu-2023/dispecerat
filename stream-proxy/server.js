@@ -51,7 +51,7 @@ function startCamera(cameraId, rtspUrl, mode = "default") {
     // Many tiles → small + low bandwidth
     SCALE = process.env.STREAM_SCALE_WALL || "scale=480:-2";
     FPS   = process.env.STREAM_FPS_WALL   || "10";
-    BITRATE = process.env.STREAM_BITRATE_WALL || "250k";
+    BITRATE = process.env.STREAM_BITRATE_WALL || "150k";
     GOP   = process.env.STREAM_GOP_WALL || "20";
   } else {
     SCALE = process.env.STREAM_SCALE || "scale=854:-2";
